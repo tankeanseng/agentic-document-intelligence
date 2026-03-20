@@ -2,19 +2,23 @@
 
 Production-grade multi-source RAG system for complex document intelligence across vector search, GraphRAG, and SQL. This project is built as a full-stack AI product rather than a notebook demo: retrieval engineering, answer-quality control, orchestration, frontend UX, and public AWS deployment are all part of the system design.
 
-## Why This Is A Strong Senior-Level AI Project
+## Live Deployment
+
+- Frontend: `https://d2mwxp9ivx7w3g.cloudfront.net`
+
+## Frontend UI
+
+The application includes demo hydration, question answering, graph exploration, citation inspection, telemetry, scoring, and downloadable demo assets.
+
+![Frontend UI](docs/images/frontend-ui.jpg)
+
+## Overview
 
 - It tackles real RAG failure modes instead of only showing a happy-path chatbot.
 - It combines multiple retrieval paradigms rather than depending on a single vector store.
 - It treats answer quality as a systems problem with critique, correction, evaluation, and bounded runtime control.
 - It includes production-facing concerns such as latency policy, serverless state management, deployment packaging, and frontend observability.
 - It exposes evidence, citations, telemetry, graph context, and downloadable demo assets in a usable product interface.
-
-## Frontend UI
-
-The project includes a full user-facing interface for demo hydration, question answering, graph exploration, citation inspection, telemetry, scoring, and downloadable demo assets.
-
-![Frontend UI](docs/images/frontend-ui.jpg)
 
 ## Why This Project Matters
 
@@ -425,7 +429,7 @@ This project also includes substantial non-AI engineering work:
 - conversation-meta
   - `What is my previous question?`
 
-## Public Deployment
+## Deployment Architecture
 
 - Frontend: CloudFront
 - Backend: AWS Lambda plus API Gateway
@@ -433,10 +437,6 @@ This project also includes substantial non-AI engineering work:
 - Graph store: Kuzu hydrated from S3 into Lambda `/tmp`
 - SQL store: SQLite hydrated from S3 into Lambda `/tmp`
 - Runtime state: S3-backed job and session records for serverless compatibility
-
-Live frontend:
-
-- `https://d2mwxp9ivx7w3g.cloudfront.net`
 
 ## Repository Structure
 
