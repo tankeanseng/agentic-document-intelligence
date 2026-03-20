@@ -1,0 +1,18 @@
+{
+  "generated_at": "2026-03-18T05:55:54.864529+00:00",
+  "model": "gpt-5-mini",
+  "result": {
+    "original_query": "What was revenue?",
+    "rewrite_count": 2,
+    "rewrites": [
+      {
+        "query": "What was revenue?",
+        "angle": "direct"
+      },
+      {
+        "query": "What revenue was reported?",
+        "angle": "financial_disclosure"
+      }
+    ]
+  }
+}
