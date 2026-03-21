@@ -4,7 +4,7 @@
   "source_relative_path": "corpus/sources/Microsoft_FY2025_10K_Summary.pdf",
   "input_artifact_type": "document_text_extraction",
   "normalization_method": "rule_based_v1",
-  "generated_at": "2026-03-16T10:52:55.062157+00:00",
+  "generated_at": "2026-03-21T11:09:11.688120+00:00",
   "page_count": 30,
   "character_count": 47034,
   "pages": [

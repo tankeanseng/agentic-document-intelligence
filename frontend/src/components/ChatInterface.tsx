@@ -25,6 +25,24 @@ interface Citation {
     title?: string;
 }
 
+interface GuardrailFinding {
+    type?: string;
+    match_preview?: string;
+    action?: string;
+}
+
+interface GuardrailPayload {
+    blocked?: boolean;
+    reason?: string;
+    risk_level?: string;
+    warnings?: string[];
+    attack_types?: string[];
+    pii_findings?: GuardrailFinding[];
+    sanitized_query?: string;
+    policy_version?: string;
+    confidence?: string;
+}
+
 interface Message {
     id: string;
     role: 'user' | 'assistant';
@@ -36,6 +54,7 @@ interface Message {
     subqueryCap?: number;
     resolvedQuery?: string;
     sourcesUsed?: string[];
+    guardrails?: GuardrailPayload;
 }
 
 const DEFAULT_DEMO_QUERY = "Summarize the management commentary about AI demand, cloud momentum, and capital expenditure needs, and explain how those themes relate to Microsoft's strategy.";
@@ -226,11 +245,51 @@ const EvaluationDashboard = ({ evalData, pending }: { evalData?: any, pending?: 
     );
 };
 
-const ParsedResponse = ({ content, citations, evaluation, evaluationPending, truncatedSubqueries, subqueryCap }: { content: string, citations?: Citation[], evaluation?: any, evaluationPending?: boolean, truncatedSubqueries?: boolean, subqueryCap?: number }) => {
+const GuardrailNotice = ({ guardrails }: { guardrails?: GuardrailPayload }) => {
+    if (!guardrails) return null;
+    const warnings = Array.isArray(guardrails.warnings) ? guardrails.warnings : [];
+    const piiFindings = Array.isArray(guardrails.pii_findings) ? guardrails.pii_findings : [];
+    const attackTypes = Array.isArray(guardrails.attack_types) ? guardrails.attack_types : [];
+    if (!guardrails.blocked && warnings.length === 0 && piiFindings.length === 0 && attackTypes.length === 0) {
+        return null;
+    }
+
+    const toneClass = guardrails.blocked
+        ? 'bg-rose-500/8 border-rose-400/30 text-rose-100'
+        : 'bg-amber-500/8 border-amber-400/30 text-amber-100';
+
+    return (
+        <div className={`mt-4 rounded-md border px-3 py-2 text-[11px] ${toneClass}`}>
+            {guardrails.blocked ? (
+                <p className="font-medium">Input blocked by safety guardrails.</p>
+            ) : (
+                <p className="font-medium">Input safety processing applied.</p>
+            )}
+            {warnings.map((warning) => (
+                <p key={warning} className="mt-1 opacity-90">{warning}</p>
+            ))}
+            {piiFindings.length > 0 && (
+                <p className="mt-1 opacity-90">
+                    Redacted: {piiFindings.map((finding) => finding.type || 'sensitive_data').join(', ')}.
+                </p>
+            )}
+            {attackTypes.length > 0 && (
+                <p className="mt-1 opacity-90">
+                    Signals: {attackTypes.join(', ')}.
+                </p>
+            )}
+        </div>
+    );
+};
+
+const ParsedResponse = ({ content, citations, evaluation, evaluationPending, truncatedSubqueries, subqueryCap, guardrails }: { content: string, citations?: Citation[], evaluation?: any, evaluationPending?: boolean, truncatedSubqueries?: boolean, subqueryCap?: number, guardrails?: GuardrailPayload }) => {
     if (!citations || citations.length === 0) {
         return (
-            <div className="prose prose-invert prose-sm max-w-none prose-a:text-cyan-400 prose-code:text-indigo-300">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            <div>
+                <div className="prose prose-invert prose-sm max-w-none prose-a:text-cyan-400 prose-code:text-indigo-300">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                </div>
+                <GuardrailNotice guardrails={guardrails} />
             </div>
         );
     }
@@ -279,6 +338,7 @@ const ParsedResponse = ({ content, citations, evaluation, evaluationPending, tru
                     Complex question truncated to {subqueryCap ?? 3} sub-queries for latency control.
                 </p>
             )}
+            <GuardrailNotice guardrails={guardrails} />
             <EvaluationDashboard evalData={evaluation} pending={evaluationPending} />
         </div>
     );
@@ -566,7 +626,8 @@ export function ChatInterface() {
                         evaluation: payload.evaluation,
                         evaluationPending: payload.evaluation_pending,
                         truncatedSubqueries: payload.truncated_subqueries,
-                        subqueryCap: payload.subquery_cap
+                        subqueryCap: payload.subquery_cap,
+                        guardrails: payload.guardrails
                     } : msg
                 ));
                 return;
@@ -595,7 +656,8 @@ export function ChatInterface() {
                         truncatedSubqueries: Boolean(payload.truncated_subqueries),
                         subqueryCap: Number(payload.subquery_cap ?? 3),
                         resolvedQuery: payload.resolved_query,
-                        sourcesUsed: payload.sources_used
+                        sourcesUsed: payload.sources_used,
+                        guardrails: payload.guardrails
                     } : msg
                 ));
                 if (payload.evaluation_pending) {
@@ -763,6 +825,7 @@ export function ChatInterface() {
                                         evaluationPending={m.evaluationPending}
                                         truncatedSubqueries={m.truncatedSubqueries}
                                         subqueryCap={m.subqueryCap}
+                                        guardrails={m.guardrails}
                                     />
                                 ) : (
                                     <span className="text-sm">{m.content}</span>

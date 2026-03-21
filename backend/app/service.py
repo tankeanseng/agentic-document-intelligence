@@ -44,6 +44,11 @@ from agentic_document_intelligence.scripts.execute_multi_source_orchestration im
     load_project_env,
 )
 from agentic_document_intelligence.scripts.generate_grounded_answer import generate_grounded_answer
+from agentic_document_intelligence.scripts.input_query_guardrails import (
+    MODEL_NAME as DEFAULT_GUARDRAIL_MODEL,
+    inspect_query,
+    sanitize_conversation_history,
+)
 from agentic_document_intelligence.scripts.latency_optimized_orchestration_policy import build_latency_optimized_policy
 from agentic_document_intelligence.scripts.mmr_diversification import load_embedding_records
 from agentic_document_intelligence.scripts.multi_source_routing import (
@@ -62,6 +67,10 @@ DEFAULT_PIPELINE_MODEL = "gpt-5-mini"
 DEFAULT_ANSWER_MODEL = "gpt-5.1"
 DEFAULT_COMPRESSION_MODEL = "gpt-5-mini"
 DEFAULT_MIN_FACTS_FOR_COMPRESSION = 30
+DEFAULT_GUARDRAIL_BLOCK_MESSAGE = (
+    "I blocked this request because it appears to contain prompt-injection, secret-exfiltration, "
+    "or unsafe personal-data extraction instructions."
+)
 DEFAULT_CRITIQUE_MODEL = "gpt-5-mini"
 DEFAULT_REPAIR_MODEL = "gpt-5.1"
 DEFAULT_JUDGE_MODEL = "gpt-5-mini"
@@ -199,6 +208,62 @@ def build_conversation_meta_response(
     }
 
 
+def build_guardrail_ui_payload(guardrail_result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "blocked": bool(guardrail_result.get("blocked", False)),
+        "reason": str(guardrail_result.get("reason", "")).strip(),
+        "risk_level": str(guardrail_result.get("risk_level", "")).strip(),
+        "warnings": list(guardrail_result.get("warnings", [])),
+        "attack_types": list(guardrail_result.get("attack_types", [])),
+        "pii_findings": list(guardrail_result.get("pii_findings", [])),
+        "sanitized_query": str(guardrail_result.get("sanitized_query", "")).strip(),
+        "policy_version": str(guardrail_result.get("policy_version", "")).strip(),
+        "confidence": str(guardrail_result.get("confidence", "")).strip(),
+    }
+
+
+def build_guardrail_block_response(
+    original_query: str,
+    sanitized_query: str,
+    conversation_history: list[dict[str, Any]],
+    guardrail_result: dict[str, Any],
+) -> dict[str, Any]:
+    reasoning = str(guardrail_result.get("user_message", "")).strip() or DEFAULT_GUARDRAIL_BLOCK_MESSAGE
+    return {
+        "answer": reasoning,
+        "citations": [],
+        "evaluation": build_unavailable_evaluation("Blocked by input guardrails before retrieval."),
+        "evaluation_pending": False,
+        "truncated_subqueries": False,
+        "subquery_cap": MAX_SUB_QUERIES,
+        "judge_average_score": None,
+        "runtime_history": [{"round": 0, "action": "input_guardrail_block"}],
+        "termination": {"action": "input_guardrail_block", "reason": guardrail_result.get("reason", "blocked")},
+        "critique": {
+            "grounded": True,
+            "complete": True,
+            "needs_correction": False,
+            "issues": [],
+            "repair_plan": [],
+        },
+        "sources_used": [],
+        "status": "blocked",
+        "original_query": original_query,
+        "resolved_query": sanitized_query or original_query,
+        "conversation_resolution": {
+            "original_query": original_query,
+            "resolved_query": sanitized_query or original_query,
+            "used_history": bool(conversation_history),
+            "referenced_turn_ids": [],
+            "confidence": "high",
+            "clarification_needed": False,
+            "notes": "Blocked before conversational resolution.",
+            "recent_turn_count": len(conversation_history),
+        },
+        "guardrails": build_guardrail_ui_payload(guardrail_result),
+    }
+
+
 @dataclass
 class JobEvent:
     timestamp: str
@@ -294,7 +359,8 @@ class DemoResources:
             if not pinecone_api_key:
                 raise RuntimeError("PINECONE_API_KEY must be set in agentic_document_intelligence/.env")
 
-            self.openai_client = OpenAI(api_key=openai_api_key)
+            if self.openai_client is None:
+                self.openai_client = OpenAI(api_key=openai_api_key)
             self.pinecone_client = Pinecone(api_key=pinecone_api_key)
             self.index = self.pinecone_client.Index(index_name)
             self.schema_package = load_json_result(self.runtime_app_root / DEFAULT_SQL_SCHEMA_PATH)
@@ -305,6 +371,16 @@ class DemoResources:
             self.chunk_to_record_id = load_embedding_records(self.runtime_app_root / DEFAULT_EMBEDDING_INPUT)
             self.graph_payload = self._load_graph_payload()
             self._initialized = True
+
+    def ensure_openai_client(self) -> OpenAI:
+        with self._lock:
+            if self.openai_client is not None:
+                return self.openai_client
+            openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+            if not openai_api_key:
+                raise RuntimeError("OPENAI_API_KEY must be set in agentic_document_intelligence/.env")
+            self.openai_client = OpenAI(api_key=openai_api_key)
+            return self.openai_client
 
     def _load_graph_payload(self) -> dict[str, Any]:
         payload = json.loads((self.runtime_app_root / GRAPH_VALIDATED_PATH).read_text(encoding="utf-8"))
@@ -650,9 +726,10 @@ class DemoAppService:
             raise RuntimeError("Load Demo Experience before asking questions.")
         if session.questions_remaining <= 0:
             raise RuntimeError("Question limit reached for this session.")
-        self.resources.ensure_initialized()
+        self.resources.ensure_openai_client()
         result = self._run_query_pipeline(job_id, query, conversation_history)
-        session.questions_used += 1
+        if result.get("status") != "blocked":
+            session.questions_used += 1
         self._save_session(session)
         return result
 
@@ -664,6 +741,44 @@ class DemoAppService:
     ) -> dict[str, Any]:
         resources = self.resources
         assert resources.openai_client is not None
+
+        safe_history = sanitize_conversation_history(conversation_history)
+        guardrail_result = inspect_query(
+            query,
+            client=resources.openai_client,
+            model=DEFAULT_GUARDRAIL_MODEL,
+        )
+        sanitized_query = guardrail_result["sanitized_query"] or query.strip()
+        if guardrail_result["pii_findings"]:
+            self._add_event(
+                job_id,
+                "Guardrails",
+                f"Redacted {len(guardrail_result['pii_findings'])} sensitive item(s) from the user input before retrieval.",
+            )
+        if guardrail_result["blocked"]:
+            self._add_event(
+                job_id,
+                "Guardrails",
+                f"Blocked request. reason={guardrail_result['reason']} attacks={','.join(guardrail_result['attack_types']) or 'none'}",
+            )
+            return build_guardrail_block_response(query, sanitized_query, safe_history, guardrail_result)
+
+        if sanitized_query != query.strip():
+            self._add_event(job_id, "Guardrails", "Accepted query after privacy-preserving redaction.")
+        else:
+            self._add_event(job_id, "Guardrails", "User query accepted for multi-source RAG execution.")
+
+        meta_intent = detect_conversation_meta_intent(sanitized_query)
+        if meta_intent:
+            self._add_event(job_id, "Conversation Memory", f"Detected conversation-meta query: {meta_intent}.")
+            self._add_event(job_id, "Orchestrator", "Answered directly from chat history without corpus retrieval.")
+            response = build_conversation_meta_response(sanitized_query, meta_intent, safe_history)
+            response["original_query"] = query
+            response["resolved_query"] = sanitized_query
+            response["guardrails"] = build_guardrail_ui_payload(guardrail_result)
+            return response
+
+        resources.ensure_initialized()
         assert resources.pinecone_client is not None
         assert resources.index is not None
         assert resources.schema_package is not None
@@ -673,16 +788,9 @@ class DemoAppService:
         assert resources.parent_index is not None
         assert resources.chunk_to_record_id is not None
 
-        self._add_event(job_id, "Guardrails", "User query accepted for multi-source RAG execution.")
-        meta_intent = detect_conversation_meta_intent(query)
-        if meta_intent:
-            self._add_event(job_id, "Conversation Memory", f"Detected conversation-meta query: {meta_intent}.")
-            self._add_event(job_id, "Orchestrator", "Answered directly from chat history without corpus retrieval.")
-            return build_conversation_meta_response(query, meta_intent, conversation_history)
-
         conversation_resolution = resolve_conversational_query(
-            query,
-            conversation_history,
+            sanitized_query,
+            safe_history,
             model=DEFAULT_PIPELINE_MODEL,
             client=resources.openai_client,
             max_recent_turns=DEFAULT_CONVERSATION_MEMORY_TURNS,
@@ -821,6 +929,7 @@ class DemoAppService:
                     critique_result=cycle["critique_result"],
                     runtime_history=history,
                     termination=decision,
+                    guardrails=guardrail_result,
                 )
 
             retry_state["total_rounds_used"] += 1
@@ -948,6 +1057,7 @@ def build_ui_answer_payload(
     critique_result: dict[str, Any],
     runtime_history: list[dict[str, Any]],
     termination: dict[str, Any],
+    guardrails: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     answer_text, citations = build_ui_citations_and_answer(fused_bundle, answer_result)
     metrics = judge_result["metrics"]
@@ -984,6 +1094,7 @@ def build_ui_answer_payload(
         "original_query": query,
         "resolved_query": resolved_query,
         "conversation_resolution": conversation_resolution,
+        "guardrails": build_guardrail_ui_payload(guardrails or {}),
     }
     return payload
 

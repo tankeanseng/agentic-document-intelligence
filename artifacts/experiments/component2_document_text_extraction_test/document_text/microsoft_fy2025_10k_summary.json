@@ -3,7 +3,7 @@
   "source_file": "Microsoft_FY2025_10K_Summary.pdf",
   "source_relative_path": "corpus/sources/Microsoft_FY2025_10K_Summary.pdf",
   "extraction_method": "pypdf_page_text_extraction",
-  "generated_at": "2026-03-16T10:48:54.111296+00:00",
+  "generated_at": "2026-03-21T11:09:12.563720+00:00",
   "page_count": 30,
   "character_count": 47255,
   "pages": [

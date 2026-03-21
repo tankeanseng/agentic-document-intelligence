@@ -26,6 +26,9 @@ env/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/.npm-cache/
+frontend/test-results/
+frontend/playwright-report/
 frontend/dev_frontend_run.log
 
 # Build and deployment outputs

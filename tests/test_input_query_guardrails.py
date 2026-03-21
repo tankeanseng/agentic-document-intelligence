@@ -35,6 +35,20 @@ class InputQueryGuardrailTests(unittest.TestCase):
         self.assertTrue(result["blocked"])
         self.assertEqual(result["reason"], "data_exfiltration")
 
+    def test_incidental_pii_is_redacted_not_blocked(self):
+        result = inspect_query("My email is jane.doe@example.com. Which segment includes GitHub and what was its FY2025 revenue?")
+        self.assertTrue(result["allowed"])
+        self.assertFalse(result["blocked"])
+        self.assertIn("[REDACTED_EMAIL_ADDRESS]", result["sanitized_query"])
+        self.assertTrue(result["pii_findings"])
+
+    def test_complex_legitimate_query_is_allowed(self):
+        result = inspect_query(
+            "Rank Microsoft's FY2025 segments by revenue, identify which one grew the fastest, and explain the demand drivers behind that growth."
+        )
+        self.assertTrue(result["allowed"])
+        self.assertFalse(result["blocked"])
+
     def test_sanitization_normalizes_whitespace(self):
         cleaned = sanitize_query("What\u200b  were   revenue?\r\n\r\n\r\nTell me.")
         self.assertNotIn("\u200b", cleaned)

@@ -3,7 +3,7 @@
   "input_artifact_type": "chunk_records",
   "embedding_provider_target": "pinecone",
   "embedding_model_target": "text-embedding-3-small",
-  "generated_at": "2026-03-16T11:32:03.641702+00:00",
+  "generated_at": "2026-03-21T11:09:17.945710+00:00",
   "record_count": 151,
   "records": [
     {
